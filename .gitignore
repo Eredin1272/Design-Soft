@@ -1,3 +1,268 @@
-bin/
-obj/
-.idea/
+import argparse
+import json
+import logging
+import re
+from datetime import datetime
+from pathlib import Path
+
+import requests
+
+
+# --------------------------------------------------
+# Configuration
+# --------------------------------------------------
+
+API_URL = "http://localhost:8000/api/exchange-rate"
+
+MIN_DATE = datetime.strptime("2025-01-01", "%Y-%m-%d").date()
+MAX_DATE = datetime.strptime("2025-09-15", "%Y-%m-%d").date()
+
+# lab02/currency_exchange_rate.py -> project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+DATA_DIRECTORY = PROJECT_ROOT / "data"
+LOG_FILE = PROJECT_ROOT / "error.log"
+
+
+# --------------------------------------------------
+# Logging
+# --------------------------------------------------
+
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.ERROR,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+
+# --------------------------------------------------
+# Validation
+# --------------------------------------------------
+
+def validate_currency(currency: str) -> str:
+    """
+    Validate a currency code.
+
+    The currency code must contain exactly
+    three Latin letters, for example USD or EUR.
+    """
+
+    currency = currency.upper()
+
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise argparse.ArgumentTypeError(
+            f"Invalid currency code: {currency}. "
+            "Use a three-letter code such as USD, EUR or MDL."
+        )
+
+    return currency
+
+
+def validate_date(date_string: str) -> str:
+    """
+    Validate the date format and allowed date range.
+    """
+
+    try:
+        request_date = datetime.strptime(
+            date_string,
+            "%Y-%m-%d"
+        ).date()
+
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "Invalid date format. Use YYYY-MM-DD."
+        )
+
+    if not MIN_DATE <= request_date <= MAX_DATE:
+        raise argparse.ArgumentTypeError(
+            "Date must be between "
+            "2025-01-01 and 2025-09-15."
+        )
+
+    return date_string
+
+
+# --------------------------------------------------
+# API
+# --------------------------------------------------
+
+def get_exchange_rate(
+        base_currency: str,
+        target_currency: str,
+        request_date: str
+) -> dict:
+    """
+    Send a request to the currency exchange API
+    and return the received JSON data.
+    """
+
+    params = {
+        "from": base_currency,
+        "to": target_currency,
+        "date": request_date
+    }
+
+    response = requests.get(
+        API_URL,
+        params=params,
+        timeout=10
+    )
+
+    response.raise_for_status()
+
+    return response.json()
+
+
+# --------------------------------------------------
+# File operations
+# --------------------------------------------------
+
+def save_data(
+        data: dict,
+        base_currency: str,
+        target_currency: str,
+        request_date: str
+) -> Path:
+    """
+    Save API response to the data directory.
+    """
+
+    DATA_DIRECTORY.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    filename = (
+        f"{base_currency}_"
+        f"{target_currency}_"
+        f"{request_date}.json"
+    )
+
+    file_path = DATA_DIRECTORY / filename
+
+    with open(
+        file_path,
+        "w",
+        encoding="utf-8"
+    ) as file:
+        json.dump(
+            data,
+            file,
+            indent=4,
+            ensure_ascii=False
+        )
+
+    return file_path
+
+
+# --------------------------------------------------
+# Command-line arguments
+# --------------------------------------------------
+
+def parse_arguments():
+    """
+    Parse command-line parameters.
+    """
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Get the exchange rate between two currencies "
+            "for a specified date."
+        )
+    )
+
+    parser.add_argument(
+        "base_currency",
+        type=validate_currency,
+        help="Base currency code, for example USD"
+    )
+
+    parser.add_argument(
+        "target_currency",
+        type=validate_currency,
+        help="Target currency code, for example EUR"
+    )
+
+    parser.add_argument(
+        "date",
+        type=validate_date,
+        help="Request date in YYYY-MM-DD format"
+    )
+
+    return parser.parse_args()
+
+
+# --------------------------------------------------
+# Main
+# --------------------------------------------------
+
+def main():
+    args = parse_arguments()
+
+    try:
+        print(
+            f"Requesting exchange rate: "
+            f"{args.base_currency} -> "
+            f"{args.target_currency} "
+            f"for {args.date}"
+        )
+
+        data = get_exchange_rate(
+            args.base_currency,
+            args.target_currency,
+            args.date
+        )
+
+        saved_file = save_data(
+            data,
+            args.base_currency,
+            args.target_currency,
+            args.date
+        )
+
+        print("Request completed successfully.")
+        print(f"Data saved to: {saved_file}")
+
+    except requests.exceptions.HTTPError as error:
+        message = f"API returned an HTTP error: {error}"
+
+        print(f"Error: {message}")
+        logging.error(message)
+
+    except requests.exceptions.ConnectionError:
+        message = (
+            "Could not connect to the API. "
+            "Make sure the service is running."
+        )
+
+        print(f"Error: {message}")
+        logging.error(message)
+
+    except requests.exceptions.Timeout:
+        message = "The API request timed out."
+
+        print(f"Error: {message}")
+        logging.error(message)
+
+    except requests.exceptions.RequestException as error:
+        message = f"Request error: {error}"
+
+        print(f"Error: {message}")
+        logging.error(message)
+
+    except json.JSONDecodeError:
+        message = "The API returned invalid JSON data."
+
+        print(f"Error: {message}")
+        logging.error(message)
+
+    except Exception as error:
+        message = f"Unexpected error: {error}"
+
+        print(f"Error: {message}")
+        logging.exception(message)
+
+
+if __name__ == "__main__":
+    main()

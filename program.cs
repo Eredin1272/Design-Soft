@@ -42,5 +42,3 @@ void C()
 {
     Console.WriteLine("C");
 }
-
-
